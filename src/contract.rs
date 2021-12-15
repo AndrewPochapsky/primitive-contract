@@ -2,7 +2,6 @@
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
     to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
-    Uint128,
 };
 use cw2::set_contract_version;
 
@@ -51,24 +50,10 @@ pub fn execute_set_value(
     name: String,
     value: Primitive,
 ) -> Result<Response, ContractError> {
-    match DATA.load(deps.storage, (&info.sender, &name)) {
-        Ok(_) => {
-            DATA.update(deps.storage, (&info.sender, &name), |old| match old {
-                Some(_) => Ok(value.clone()),
-                None => Err(StdError::GenericErr {
-                    msg: "error".to_string(),
-                }),
-            })?;
-        }
-        Err(_) => {
-            DATA.update(deps.storage, (&info.sender, &name), |old| match old {
-                Some(_) => Err(StdError::GenericErr {
-                    msg: "error".to_string(),
-                }),
-                None => Ok(value.clone()),
-            })?;
-        }
-    }
+    DATA.update::<_, StdError>(deps.storage, (&info.sender, &name), |old| match old {
+        Some(_) => Ok(value.clone()),
+        None => Ok(value.clone()),
+    })?;
 
     Ok(Response::new()
         .add_attribute("method", "set_value")
@@ -116,6 +101,11 @@ mod tests {
     use cosmwasm_std::from_binary;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
 
+    fn query_value_helper(deps: Deps, address: Addr, name: String) -> GetValueResponse {
+        from_binary(&query(deps, mock_env(), QueryMsg::GetValue { address, name }).unwrap())
+            .unwrap()
+    }
+
     #[test]
     fn proper_initialization() {
         let mut deps = mock_dependencies(&[]);
@@ -129,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn set_value() {
+    fn set_and_update_value() {
         let mut deps = mock_dependencies(&[]);
 
         let msg = InstantiateMsg {};
@@ -145,30 +135,44 @@ mod tests {
         };
         let res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
         assert_eq!(
-            res,
             Response::new()
                 .add_attribute("method", "set_value")
                 .add_attribute("sender", "user1")
                 .add_attribute("name", "test1")
-                .add_attribute("value", "String(\"value1\")")
+                .add_attribute("value", "String(\"value1\")"),
+            res
         );
 
-        let query_res: GetValueResponse = from_binary(
-            &query(
-                deps.as_ref(),
-                mock_env(),
-                QueryMsg::GetValue {
-                    address: user1.sender.clone(),
-                    name: "test1".to_string(),
-                },
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let query_res: GetValueResponse =
+            query_value_helper(deps.as_ref(), user1.sender.clone(), "test1".to_string());
 
-        assert_eq!(query_res.name, "test1".to_string());
-        assert_eq!(query_res.value, Primitive::String("value1".to_string()));
+        assert_eq!(
+            GetValueResponse {
+                name: "test1".to_string(),
+                value: Primitive::String("value1".to_string())
+            },
+            query_res
+        );
+
+        // Update the value to something else
+        let msg = ExecuteMsg::SetValue {
+            name: "test1".to_string(),
+            value: Primitive::String("value2".to_string()),
+        };
+        let _res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+
+        let query_res: GetValueResponse =
+            query_value_helper(deps.as_ref(), user1.sender.clone(), "test1".to_string());
+
+        assert_eq!(
+            GetValueResponse {
+                name: "test1".to_string(),
+                value: Primitive::String("value2".to_string())
+            },
+            query_res
+        );
     }
+
     #[test]
     fn delete_value() {
         let mut deps = mock_dependencies(&[]);
@@ -186,21 +190,16 @@ mod tests {
         };
         let _res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
 
-        let query_res: GetValueResponse = from_binary(
-            &query(
-                deps.as_ref(),
-                mock_env(),
-                QueryMsg::GetValue {
-                    address: user1.sender.clone(),
-                    name: "test1".to_string(),
-                },
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let query_res: GetValueResponse =
+            query_value_helper(deps.as_ref(), user1.sender.clone(), "test1".to_string());
 
-        assert_eq!(query_res.name, "test1".to_string());
-        assert_eq!(query_res.value, Primitive::String("value1".to_string()));
+        assert_eq!(
+            GetValueResponse {
+                name: "test1".to_string(),
+                value: Primitive::String("value1".to_string())
+            },
+            query_res
+        );
 
         let msg = ExecuteMsg::DeleteValue {
             name: "test1".to_string(),
