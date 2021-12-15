@@ -1,12 +1,14 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
+use cosmwasm_std::{
+    to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
+    Uint128,
+};
 use cw2::set_contract_version;
-use std::collections::HashMap;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, GetValueResponse, InstantiateMsg, QueryMsg};
-use crate::state::{Primitive, State, DATA, STATE};
+use crate::msg::{ConfigResponse, ExecuteMsg, GetValueResponse, InstantiateMsg, QueryMsg};
+use crate::state::{Config, Primitive, CONFIG, DATA};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:primitive-contract";
@@ -17,13 +19,13 @@ pub fn instantiate(
     deps: DepsMut,
     _env: Env,
     info: MessageInfo,
-    msg: InstantiateMsg,
+    _msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    let state = State {
+    let config = Config {
         owner: info.sender.clone(),
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-    STATE.save(deps.storage, &state)?;
+    CONFIG.save(deps.storage, &config)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
@@ -38,45 +40,41 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::AddValue { name, value } => execute_add_value(deps, info, name, value),
-        ExecuteMsg::UpdateValue { name, value } => execute_update_value(deps, info, name, value),
+        ExecuteMsg::SetValue { name, value } => execute_set_value(deps, info, name, value),
         ExecuteMsg::DeleteValue { name } => execute_delete_value(deps, info, name),
     }
 }
 
-pub fn execute_add_value(
+pub fn execute_set_value(
     deps: DepsMut,
     info: MessageInfo,
     name: String,
     value: Primitive,
 ) -> Result<Response, ContractError> {
-    DATA.update(deps.storage, info.sender, |existing| match existing {
-        None => {
-            let map: HashMap<String, Primitive> = HashMap::new();
-            map.insert(name, value);
-            Ok(map)
+    match DATA.load(deps.storage, (&info.sender, &name)) {
+        Ok(_) => {
+            DATA.update(deps.storage, (&info.sender, &name), |old| match old {
+                Some(_) => Ok(value.clone()),
+                None => Err(StdError::GenericErr {
+                    msg: "error".to_string(),
+                }),
+            })?;
         }
-        Some(_) => Err(ContractError::PrimitiveExists {}),
-    })?;
-
-    Ok(Response::new().add_attribute("method", "try_increment"))
-}
-
-pub fn execute_update_value(
-    deps: DepsMut,
-    info: MessageInfo,
-    name: String,
-    value: Primitive,
-) -> Result<Response, ContractError> {
-    DATA.update(deps.storage, info.sender, |existing| match existing {
-        None => Err(ContractError::PrimitiveDoesNotExist {}),
-        Some(data) => {
-            data.insert(name, value);
-            Ok(data)
+        Err(_) => {
+            DATA.update(deps.storage, (&info.sender, &name), |old| match old {
+                Some(_) => Err(StdError::GenericErr {
+                    msg: "error".to_string(),
+                }),
+                None => Ok(value.clone()),
+            })?;
         }
-    })?;
+    }
 
-    Ok(Response::new().add_attribute("method", "try_increment"))
+    Ok(Response::new()
+        .add_attribute("method", "set_value")
+        .add_attribute("sender", info.sender)
+        .add_attribute("name", name)
+        .add_attribute("value", format!("{:?}", value)))
 }
 
 pub fn execute_delete_value(
@@ -84,96 +82,145 @@ pub fn execute_delete_value(
     info: MessageInfo,
     name: String,
 ) -> Result<Response, ContractError> {
-    DATA.update(deps.storage, info.sender, |existing| match existing {
-        None => Err(ContractError::PrimitiveDoesNotExist {}),
-        Some(data) => {
-            data.remove(&name);
-            Ok(data)
-        }
-    })?;
+    DATA.remove(deps.storage, (&info.sender, &name));
 
-    Ok(Response::new().add_attribute("method", "try_increment"))
+    Ok(Response::new()
+        .add_attribute("method", "delete_value")
+        .add_attribute("sender", info.sender)
+        .add_attribute("name", name))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetCount {} => to_binary(&query_count(deps)?),
+        QueryMsg::Config {} => to_binary(&query_config(deps)?),
+        QueryMsg::GetValue { address, name } => to_binary(&query_value(deps, address, name)?),
     }
 }
 
-fn query_count(deps: Deps) -> StdResult<CountResponse> {
-    let state = STATE.load(deps.storage)?;
-    Ok(CountResponse { count: state.count })
+fn query_value(deps: Deps, address: Addr, name: String) -> StdResult<GetValueResponse> {
+    let value = DATA.load(deps.storage, (&address, &name))?;
+    Ok(GetValueResponse { name, value })
+}
+
+fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
+    let config = CONFIG.load(deps.storage)?;
+    Ok(ConfigResponse {
+        owner: config.owner,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cosmwasm_std::from_binary;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{coins, from_binary};
 
     #[test]
     fn proper_initialization() {
         let mut deps = mock_dependencies(&[]);
 
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(1000, "earth"));
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &[]);
 
         // we can just call .unwrap() to assert this was a success
         let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
         assert_eq!(0, res.messages.len());
-
-        // it worked, let's query the state
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(17, value.count);
     }
 
     #[test]
-    fn increment() {
-        let mut deps = mock_dependencies(&coins(2, "token"));
+    fn set_value() {
+        let mut deps = mock_dependencies(&[]);
 
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(2, "token"));
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &[]);
+
+        // we can just call .unwrap() to assert this was a success
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // beneficiary can release it
-        let info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Increment {};
-        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        let user1 = mock_info("user1", &[]);
+        let msg = ExecuteMsg::SetValue {
+            name: "test1".to_string(),
+            value: Primitive::String("value1".to_string()),
+        };
+        let res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+        assert_eq!(
+            res,
+            Response::new()
+                .add_attribute("method", "set_value")
+                .add_attribute("sender", "user1")
+                .add_attribute("name", "test1")
+                .add_attribute("value", "String(\"value1\")")
+        );
 
-        // should increase counter by 1
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(18, value.count);
+        let query_res: GetValueResponse = from_binary(
+            &query(
+                deps.as_ref(),
+                mock_env(),
+                QueryMsg::GetValue {
+                    address: user1.sender.clone(),
+                    name: "test1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(query_res.name, "test1".to_string());
+        assert_eq!(query_res.value, Primitive::String("value1".to_string()));
     }
-
     #[test]
-    fn reset() {
-        let mut deps = mock_dependencies(&coins(2, "token"));
+    fn delete_value() {
+        let mut deps = mock_dependencies(&[]);
 
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(2, "token"));
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &[]);
+
+        // we can just call .unwrap() to assert this was a success
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // beneficiary can release it
-        let unauth_info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let res = execute(deps.as_mut(), mock_env(), unauth_info, msg);
-        match res {
-            Err(ContractError::Unauthorized {}) => {}
-            _ => panic!("Must return unauthorized error"),
-        }
+        let user1 = mock_info("user1", &[]);
+        let msg = ExecuteMsg::SetValue {
+            name: "test1".to_string(),
+            value: Primitive::String("value1".to_string()),
+        };
+        let _res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
 
-        // only the original creator can reset the counter
-        let auth_info = mock_info("creator", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let _res = execute(deps.as_mut(), mock_env(), auth_info, msg).unwrap();
+        let query_res: GetValueResponse = from_binary(
+            &query(
+                deps.as_ref(),
+                mock_env(),
+                QueryMsg::GetValue {
+                    address: user1.sender.clone(),
+                    name: "test1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
 
-        // should now be 5
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(5, value.count);
+        assert_eq!(query_res.name, "test1".to_string());
+        assert_eq!(query_res.value, Primitive::String("value1".to_string()));
+
+        let msg = ExecuteMsg::DeleteValue {
+            name: "test1".to_string(),
+        };
+        let res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+        assert_eq!(
+            res,
+            Response::new()
+                .add_attribute("method", "delete_value")
+                .add_attribute("sender", "user1")
+                .add_attribute("name", "test1")
+        );
+        let query_res = &query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::GetValue {
+                address: user1.sender.clone(),
+                name: "test1".to_string(),
+            },
+        );
+        assert!(query_res.is_err());
     }
 }
