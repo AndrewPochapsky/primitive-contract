@@ -2,10 +2,11 @@
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
 use cw2::set_contract_version;
+use std::collections::HashMap;
 
 use crate::error::ContractError;
-use crate::msg::{CountResponse, ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{State, STATE};
+use crate::msg::{ExecuteMsg, GetValueResponse, InstantiateMsg, QueryMsg};
+use crate::state::{Primitive, State, DATA, STATE};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:primitive-contract";
@@ -19,7 +20,6 @@ pub fn instantiate(
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     let state = State {
-        count: msg.count,
         owner: info.sender.clone(),
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
@@ -27,8 +27,7 @@ pub fn instantiate(
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
-        .add_attribute("owner", info.sender)
-        .add_attribute("count", msg.count.to_string()))
+        .add_attribute("owner", info.sender))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -39,28 +38,61 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::Increment {} => try_increment(deps),
-        ExecuteMsg::Reset { count } => try_reset(deps, info, count),
+        ExecuteMsg::AddValue { name, value } => execute_add_value(deps, info, name, value),
+        ExecuteMsg::UpdateValue { name, value } => execute_update_value(deps, info, name, value),
+        ExecuteMsg::DeleteValue { name } => execute_delete_value(deps, info, name),
     }
 }
 
-pub fn try_increment(deps: DepsMut) -> Result<Response, ContractError> {
-    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-        state.count += 1;
-        Ok(state)
+pub fn execute_add_value(
+    deps: DepsMut,
+    info: MessageInfo,
+    name: String,
+    value: Primitive,
+) -> Result<Response, ContractError> {
+    DATA.update(deps.storage, info.sender, |existing| match existing {
+        None => {
+            let map: HashMap<String, Primitive> = HashMap::new();
+            map.insert(name, value);
+            Ok(map)
+        }
+        Some(_) => Err(ContractError::PrimitiveExists {}),
     })?;
 
     Ok(Response::new().add_attribute("method", "try_increment"))
 }
-pub fn try_reset(deps: DepsMut, info: MessageInfo, count: i32) -> Result<Response, ContractError> {
-    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-        if info.sender != state.owner {
-            return Err(ContractError::Unauthorized {});
+
+pub fn execute_update_value(
+    deps: DepsMut,
+    info: MessageInfo,
+    name: String,
+    value: Primitive,
+) -> Result<Response, ContractError> {
+    DATA.update(deps.storage, info.sender, |existing| match existing {
+        None => Err(ContractError::PrimitiveDoesNotExist {}),
+        Some(data) => {
+            data.insert(name, value);
+            Ok(data)
         }
-        state.count = count;
-        Ok(state)
     })?;
-    Ok(Response::new().add_attribute("method", "reset"))
+
+    Ok(Response::new().add_attribute("method", "try_increment"))
+}
+
+pub fn execute_delete_value(
+    deps: DepsMut,
+    info: MessageInfo,
+    name: String,
+) -> Result<Response, ContractError> {
+    DATA.update(deps.storage, info.sender, |existing| match existing {
+        None => Err(ContractError::PrimitiveDoesNotExist {}),
+        Some(data) => {
+            data.remove(&name);
+            Ok(data)
+        }
+    })?;
+
+    Ok(Response::new().add_attribute("method", "try_increment"))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
