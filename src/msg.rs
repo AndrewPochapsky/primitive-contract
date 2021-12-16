@@ -24,7 +24,7 @@ pub enum ExecuteMsg {
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     Config {},
-    /// If name is not specified the sender's address will be used as the name of the primitive.
+    /// If name is not specified the given address will be used as the name of the primitive.
     GetValue {
         address: Addr,
         name: Option<String>,
