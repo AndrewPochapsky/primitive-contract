@@ -9,15 +9,20 @@ pub struct InstantiateMsg {}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    SetValue { name: String, value: Primitive },
-    DeleteValue { name: String },
+    SetValue {
+        name: Option<String>,
+        value: Primitive,
+    },
+    DeleteValue {
+        name: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     Config {},
-    GetValue { address: Addr, name: String },
+    GetValue { address: Addr, name: Option<String> },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
