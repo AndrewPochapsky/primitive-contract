@@ -51,6 +51,9 @@ pub fn execute_set_value(
     value: Primitive,
 ) -> Result<Response, ContractError> {
     check_is_owner(&deps, &info.sender)?;
+    if value.is_invalid() {
+        return Err(ContractError::InvalidPrimitive {});
+    }
     let name: &str = get_name_or_default(&name);
     DATA.update::<_, StdError>(deps.storage, &name, |old| match old {
         Some(_) => Ok(value.clone()),
@@ -243,6 +246,25 @@ mod tests {
             },
             query_res
         );
+    }
+
+    #[test]
+    fn cannot_set_nested_vector_primitive() {
+        let mut deps = mock_dependencies(&[]);
+
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &[]);
+
+        // we can just call .unwrap() to assert this was a success
+        let _res = instantiate(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
+
+        let msg = ExecuteMsg::SetValue {
+            name: None,
+            value: Primitive::Vec(vec![Primitive::Vec(vec![])]),
+        };
+        let res: Result<Response, ContractError> =
+            execute(deps.as_mut(), mock_env(), info.clone(), msg);
+        assert_eq!(ContractError::InvalidPrimitive {}, res.unwrap_err());
     }
 
     #[test]
