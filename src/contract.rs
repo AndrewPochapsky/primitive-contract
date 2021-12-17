@@ -7,7 +7,7 @@ use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ConfigResponse, ExecuteMsg, GetValueResponse, InstantiateMsg, QueryMsg};
-use crate::state::{Config, Primitive, CONFIG, DATA};
+use crate::state::{Config, Primitive, CONFIG, DATA, DEFAULT_KEY};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:primitive-contract";
@@ -50,8 +50,9 @@ pub fn execute_set_value(
     name: Option<String>,
     value: Primitive,
 ) -> Result<Response, ContractError> {
-    let name = get_name(name, &info.sender);
-    DATA.update::<_, StdError>(deps.storage, (&info.sender, &name), |old| match old {
+    check_is_owner(&deps, &info.sender)?;
+    let name: &str = get_name_or_default(&name);
+    DATA.update::<_, StdError>(deps.storage, &name, |old| match old {
         Some(_) => Ok(value.clone()),
         None => Ok(value.clone()),
     })?;
@@ -68,9 +69,9 @@ pub fn execute_delete_value(
     info: MessageInfo,
     name: Option<String>,
 ) -> Result<Response, ContractError> {
-    let name = get_name(name, &info.sender);
-    DATA.remove(deps.storage, (&info.sender, &name));
-
+    check_is_owner(&deps, &info.sender)?;
+    let name = get_name_or_default(&name);
+    DATA.remove(deps.storage, name);
     Ok(Response::new()
         .add_attribute("method", "delete_value")
         .add_attribute("sender", info.sender)
@@ -81,14 +82,17 @@ pub fn execute_delete_value(
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::Config {} => to_binary(&query_config(deps)?),
-        QueryMsg::GetValue { address, name } => to_binary(&query_value(deps, address, name)?),
+        QueryMsg::GetValue { name } => to_binary(&query_value(deps, name)?),
     }
 }
 
-fn query_value(deps: Deps, address: Addr, name: Option<String>) -> StdResult<GetValueResponse> {
-    let name = get_name(name, &address);
-    let value = DATA.load(deps.storage, (&address, &name))?;
-    Ok(GetValueResponse { name, value })
+fn query_value(deps: Deps, name: Option<String>) -> StdResult<GetValueResponse> {
+    let name = get_name_or_default(&name);
+    let value = DATA.load(deps.storage, name)?;
+    Ok(GetValueResponse {
+        name: name.to_string(),
+        value,
+    })
 }
 
 fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
@@ -98,11 +102,19 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     })
 }
 
-fn get_name(name: Option<String>, address: &Addr) -> String {
+fn get_name_or_default(name: &Option<String>) -> &str {
     match name {
-        Some(n) => n,
-        None => address.to_string(),
+        None => DEFAULT_KEY,
+        Some(s) => &s,
     }
+}
+
+fn check_is_owner(deps: &DepsMut, address: &Addr) -> Result<bool, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+    if &config.owner != address {
+        return Err(ContractError::Unauthorized {});
+    }
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -111,9 +123,8 @@ mod tests {
     use cosmwasm_std::from_binary;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
 
-    fn query_value_helper(deps: Deps, address: Addr, name: Option<String>) -> GetValueResponse {
-        from_binary(&query(deps, mock_env(), QueryMsg::GetValue { address, name }).unwrap())
-            .unwrap()
+    fn query_value_helper(deps: Deps, name: Option<String>) -> GetValueResponse {
+        from_binary(&query(deps, mock_env(), QueryMsg::GetValue { name }).unwrap()).unwrap()
     }
 
     #[test]
@@ -136,28 +147,24 @@ mod tests {
         let info = mock_info("creator", &[]);
 
         // we can just call .unwrap() to assert this was a success
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+        let _res = instantiate(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
 
-        let user1 = mock_info("user1", &[]);
         let msg = ExecuteMsg::SetValue {
             name: Some("test1".to_string()),
             value: Primitive::String("value1".to_string()),
         };
-        let res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+        let res = execute(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
         assert_eq!(
             Response::new()
                 .add_attribute("method", "set_value")
-                .add_attribute("sender", "user1")
+                .add_attribute("sender", "creator")
                 .add_attribute("name", "test1")
                 .add_attribute("value", "String(\"value1\")"),
             res
         );
 
-        let query_res: GetValueResponse = query_value_helper(
-            deps.as_ref(),
-            user1.sender.clone(),
-            Some("test1".to_string()),
-        );
+        let query_res: GetValueResponse =
+            query_value_helper(deps.as_ref(), Some("test1".to_string()));
 
         assert_eq!(
             GetValueResponse {
@@ -172,13 +179,10 @@ mod tests {
             name: Some("test1".to_string()),
             value: Primitive::String("value2".to_string()),
         };
-        let _res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+        let _res = execute(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
 
-        let query_res: GetValueResponse = query_value_helper(
-            deps.as_ref(),
-            user1.sender.clone(),
-            Some("test1".to_string()),
-        );
+        let query_res: GetValueResponse =
+            query_value_helper(deps.as_ref(), Some("test1".to_string()));
 
         assert_eq!(
             GetValueResponse {
@@ -197,29 +201,27 @@ mod tests {
         let info = mock_info("creator", &[]);
 
         // we can just call .unwrap() to assert this was a success
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+        let _res = instantiate(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
 
-        let user1 = mock_info("user1", &[]);
         let msg = ExecuteMsg::SetValue {
             name: None,
             value: Primitive::String("value1".to_string()),
         };
-        let res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+        let res = execute(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
         assert_eq!(
             Response::new()
                 .add_attribute("method", "set_value")
-                .add_attribute("sender", "user1")
-                .add_attribute("name", "user1")
+                .add_attribute("sender", "creator")
+                .add_attribute("name", DEFAULT_KEY)
                 .add_attribute("value", "String(\"value1\")"),
             res
         );
 
-        let query_res: GetValueResponse =
-            query_value_helper(deps.as_ref(), user1.sender.clone(), None);
+        let query_res: GetValueResponse = query_value_helper(deps.as_ref(), None);
 
         assert_eq!(
             GetValueResponse {
-                name: "user1".to_string(),
+                name: DEFAULT_KEY.to_string(),
                 value: Primitive::String("value1".to_string())
             },
             query_res
@@ -230,14 +232,13 @@ mod tests {
             name: None,
             value: Primitive::String("value2".to_string()),
         };
-        let _res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+        let _res = execute(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
 
-        let query_res: GetValueResponse =
-            query_value_helper(deps.as_ref(), user1.sender.clone(), None);
+        let query_res: GetValueResponse = query_value_helper(deps.as_ref(), None);
 
         assert_eq!(
             GetValueResponse {
-                name: "user1".to_string(),
+                name: DEFAULT_KEY.to_string(),
                 value: Primitive::String("value2".to_string())
             },
             query_res
@@ -252,20 +253,16 @@ mod tests {
         let info = mock_info("creator", &[]);
 
         // we can just call .unwrap() to assert this was a success
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+        let _res = instantiate(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
 
-        let user1 = mock_info("user1", &[]);
         let msg = ExecuteMsg::SetValue {
             name: Some("test1".to_string()),
             value: Primitive::String("value1".to_string()),
         };
-        let _res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+        let _res = execute(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
 
-        let query_res: GetValueResponse = query_value_helper(
-            deps.as_ref(),
-            user1.sender.clone(),
-            Some("test1".to_string()),
-        );
+        let query_res: GetValueResponse =
+            query_value_helper(deps.as_ref(), Some("test1".to_string()));
 
         assert_eq!(
             GetValueResponse {
@@ -278,19 +275,18 @@ mod tests {
         let msg = ExecuteMsg::DeleteValue {
             name: Some("test1".to_string()),
         };
-        let res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+        let res = execute(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
         assert_eq!(
             res,
             Response::new()
                 .add_attribute("method", "delete_value")
-                .add_attribute("sender", "user1")
+                .add_attribute("sender", "creator")
                 .add_attribute("name", "test1")
         );
         let query_res = &query(
             deps.as_ref(),
             mock_env(),
             QueryMsg::GetValue {
-                address: user1.sender.clone(),
                 name: Some("test1".to_string()),
             },
         );
@@ -305,43 +301,77 @@ mod tests {
         let info = mock_info("creator", &[]);
 
         // we can just call .unwrap() to assert this was a success
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+        let _res = instantiate(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
 
-        let user1 = mock_info("user1", &[]);
         let msg = ExecuteMsg::SetValue {
             name: None,
             value: Primitive::String("value1".to_string()),
         };
-        let _res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+        let _res = execute(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
 
-        let query_res: GetValueResponse =
-            query_value_helper(deps.as_ref(), user1.sender.clone(), None);
+        let query_res: GetValueResponse = query_value_helper(deps.as_ref(), None);
 
         assert_eq!(
             GetValueResponse {
-                name: "user1".to_string(),
+                name: DEFAULT_KEY.to_string(),
                 value: Primitive::String("value1".to_string())
             },
             query_res
         );
 
         let msg = ExecuteMsg::DeleteValue { name: None };
-        let res = execute(deps.as_mut(), mock_env(), user1.clone(), msg).unwrap();
+        let res = execute(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
         assert_eq!(
             res,
             Response::new()
                 .add_attribute("method", "delete_value")
-                .add_attribute("sender", "user1")
-                .add_attribute("name", "user1")
+                .add_attribute("sender", "creator")
+                .add_attribute("name", DEFAULT_KEY)
         );
-        let query_res = &query(
-            deps.as_ref(),
-            mock_env(),
-            QueryMsg::GetValue {
-                address: user1.sender.clone(),
-                name: None,
-            },
-        );
+        let query_res = &query(deps.as_ref(), mock_env(), QueryMsg::GetValue { name: None });
         assert!(query_res.is_err());
+    }
+
+    #[test]
+    fn non_creator_cannot_set_value() {
+        let mut deps = mock_dependencies(&[]);
+
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &[]);
+
+        // we can just call .unwrap() to assert this was a success
+        let _res = instantiate(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
+
+        let user1 = mock_info("user1", &[]);
+        let msg = ExecuteMsg::SetValue {
+            name: Some("test1".to_string()),
+            value: Primitive::String("value1".to_string()),
+        };
+        let res: Result<Response, ContractError> =
+            execute(deps.as_mut(), mock_env(), user1.clone(), msg);
+        assert_eq!(ContractError::Unauthorized {}, res.unwrap_err());
+    }
+
+    #[test]
+    fn non_creator_cannot_delete_value() {
+        let mut deps = mock_dependencies(&[]);
+
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &[]);
+
+        // we can just call .unwrap() to assert this was a success
+        let _res = instantiate(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
+
+        let msg = ExecuteMsg::SetValue {
+            name: None,
+            value: Primitive::String("value1".to_string()),
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info.clone(), msg).unwrap();
+
+        let user1 = mock_info("user1", &[]);
+        let msg = ExecuteMsg::DeleteValue { name: None };
+        let res: Result<Response, ContractError> =
+            execute(deps.as_mut(), mock_env(), user1.clone(), msg);
+        assert_eq!(ContractError::Unauthorized {}, res.unwrap_err());
     }
 }

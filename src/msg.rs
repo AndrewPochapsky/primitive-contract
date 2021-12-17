@@ -9,14 +9,12 @@ pub struct InstantiateMsg {}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    /// If name is not specified the sender's address will be used as the name of the primitive.
-    /// This allows each user to have easy access to a single primitive if that is all they
-    /// require.
+    /// If name is not specified the default key will be used.
     SetValue {
         name: Option<String>,
         value: Primitive,
     },
-    /// If name is not specified the sender's address will be used as the name of the primitive.
+    /// If name is not specified the default key will be used.
     DeleteValue { name: Option<String> },
 }
 
@@ -24,9 +22,8 @@ pub enum ExecuteMsg {
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     Config {},
-    /// If name is not specified the given address will be used as the name of the primitive.
+    /// If name is not specified the default key will be used.
     GetValue {
-        address: Addr,
         name: Option<String>,
     },
 }
