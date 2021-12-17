@@ -16,6 +16,7 @@ pub enum Primitive {
     Uint128(Uint128),
     String(String),
     Bool(bool),
+    Vec(Vec<Primitive>),
 }
 
 fn parse_error(type_name: String) -> StdError {
@@ -28,6 +29,16 @@ fn parse_error(type_name: String) -> StdError {
 // These are methods to help the calling user quickly retreive the data in the Primitive as they
 // often already know what the type should be.
 impl Primitive {
+    pub fn is_invalid(&self) -> bool {
+        match self {
+            // Avoid infinite recursion problem by not allowing nested vectors.
+            Primitive::Vec(vector) => vector
+                .iter()
+                .any(|p| matches!(p, Primitive::Vec(_)) || p.is_invalid()),
+            _ => false,
+        }
+    }
+
     pub fn try_get_uint128(&self) -> Result<Uint128, StdError> {
         match self {
             Primitive::Uint128(value) => Ok(*value),
@@ -105,5 +116,27 @@ mod tests {
             parse_error("bool".to_string()),
             primitive.try_get_bool().unwrap_err()
         );
+    }
+
+    #[test]
+    fn is_valid() {
+        let valid_primitive = Primitive::Bool(true);
+        assert!(!valid_primitive.is_invalid());
+
+        let valid_primitive = Primitive::Uint128(Uint128::new(1_u128));
+        assert!(!valid_primitive.is_invalid());
+
+        let valid_primitive = Primitive::String("String".to_string());
+        assert!(!valid_primitive.is_invalid());
+
+        let valid_primitive = Primitive::Vec(vec![
+            Primitive::Bool(true),
+            Primitive::Uint128(Uint128::new(1_u128)),
+            Primitive::String("String".to_string()),
+        ]);
+        assert!(!valid_primitive.is_invalid());
+
+        let invalid_primitive = Primitive::Vec(vec![Primitive::Bool(true), Primitive::Vec(vec![])]);
+        assert!(invalid_primitive.is_invalid());
     }
 }
