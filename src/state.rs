@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use cosmwasm_std::{Addr, StdError, Uint128};
 use cw_storage_plus::{Item, Map};
 
+pub const DEFAULT_KEY: &str = "default";
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Config {
     pub owner: Addr,
@@ -48,7 +50,7 @@ impl Primitive {
     }
 }
 
-pub const DATA: Map<(&Addr, &str), Primitive> = Map::new("data");
+pub const DATA: Map<&str, Primitive> = Map::new("data");
 pub const CONFIG: Item<Config> = Item::new("config");
 
 #[cfg(test)]

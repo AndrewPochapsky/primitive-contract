@@ -9,15 +9,23 @@ pub struct InstantiateMsg {}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    SetValue { name: String, value: Primitive },
-    DeleteValue { name: String },
+    /// If name is not specified the default key will be used.
+    SetValue {
+        name: Option<String>,
+        value: Primitive,
+    },
+    /// If name is not specified the default key will be used.
+    DeleteValue { name: Option<String> },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     Config {},
-    GetValue { address: Addr, name: String },
+    /// If name is not specified the default key will be used.
+    GetValue {
+        name: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
