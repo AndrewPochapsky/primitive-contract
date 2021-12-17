@@ -59,6 +59,13 @@ impl Primitive {
             _ => Err(parse_error(String::from("bool"))),
         }
     }
+
+    pub fn try_get_vec(&self) -> Result<Vec<Primitive>, StdError> {
+        match self {
+            Primitive::Vec(vector) => Ok(vector.to_vec()),
+            _ => Err(parse_error(String::from("Vec"))),
+        }
+    }
 }
 
 pub const DATA: Map<&str, Primitive> = Map::new("data");
@@ -115,6 +122,21 @@ mod tests {
         assert_eq!(
             parse_error("bool".to_string()),
             primitive.try_get_bool().unwrap_err()
+        );
+    }
+
+    #[test]
+    fn try_get_vec() {
+        let primitive = Primitive::Vec(vec![Primitive::Bool(true)]);
+        assert_eq!(
+            vec![Primitive::Bool(true)],
+            primitive.try_get_vec().unwrap()
+        );
+
+        let primitive = Primitive::String("String".to_string());
+        assert_eq!(
+            parse_error("Vec".to_string()),
+            primitive.try_get_vec().unwrap_err()
         );
     }
 
